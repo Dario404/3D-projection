@@ -1,34 +1,111 @@
 // 12.11.2022
 // Siehe Rotation Matrix in Wikipedia
 
+// View Space: The world space vertex positions relative to the view of the camera
+
+/* Die Verdeckungsberechnung ist zum korrekten Rendern einer 3D-Szene notwendig, weil Oberflächen,
+   die für den Betrachter nicht sichtbar sind, auch nicht dargestellt werden sollten
+*/
+
+// ->  https://de.wikipedia.org/wiki/Sichtbarkeitsproblem
+
+
+// TODO: Raytracing/Verdeckungsberechnung
+// TODO: Texture Mapping
+
 import java.util.Arrays;
 
+import java.awt.Robot;
 
-PVector[] points;
 
-PVector cam, cam_angle, point;
+import java.nio.ByteBuffer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.ArrayList;
+
+byte b[];
+
+int amount = 0;
+String lines[];
+
+
+PVector[][] vertices;
+int[] faces;
+
+
+
+float a = 0;
+
+
+PVector cam, cam_angle, cam_move, cam_speed;
 
 float angle = 0.0;
 
+
 void setup() {
-  //fullScreen();  
-  
-  size(1000,400);
+  size(800,600);
+  frameRate(60);
   noCursor();
 
-  cam = point = new PVector(0, 0, -1000);
-  cam_angle = new PVector(0,0,0);
+  cam  = new PVector(0, 100, -500);
+  cam_angle = new PVector(0, 0, 0);
+  cam_move = new PVector(0, 0, 0);
+  cam_speed = new PVector(50, 50, 50);
+  
+  lines =  loadStrings("UM2_SkullPile28mm.obj"); 
+ 
+  println("File loaded. Now scanning contents...");
+  
+  println();
+  
+  Pattern numbers = Pattern.compile("(-?\\d+)");
+  
+  
+  ArrayList<PVector> vertices_ = new ArrayList<PVector>();
+  ArrayList<ArrayList> faces_ = new ArrayList<ArrayList>();
+  
+  int parsed_lines = 0; 
+  
+  for(String i:lines) {
+    switch(i.charAt(0)) {
+      
+      // Find faces
+      case 'f':
+        ArrayList<Integer> values = new ArrayList<Integer>();
+        for(Matcher m = numbers.matcher(i); m.find(); values.add(Integer.parseInt(m.group())));
+        faces_.add(values);
+        break;
+        
+      // Find Vectors  
+      case 'v':
+        String s[] = i.trim().split("\\s+");
+        vertices_.add(new PVector(Float.parseFloat(s[1])*20, Float.parseFloat(s[2])*20, Float.parseFloat(s[3])*20));
+        break;
+    };
+    if(++parsed_lines % (lines.length/6) == 0 || parsed_lines == lines.length) println((int)(map(parsed_lines, 0, lines.length, 0, 100)), "%");
+  }
+  
+  println();
+  println("Done. Found", vertices_.size(), "Vertices and", faces_.size(), "faces");
+  
+  
 
-  points = new PVector[] {
-    new PVector(-100, -100, -100),
-    new PVector(-100, -100, 100),
-    new PVector(-100, 100, -100),
-    new PVector(-100, 100, 100),
-    new PVector( 100, -100, -100),
-    new PVector( 100, -100, 100),
-    new PVector( 100, 100, -100),
-    new PVector( 100, 100, 100),
-  };
+  int i=0;  
+  
+  vertices = new PVector[faces_.size()][];
+  
+  for(ArrayList<Integer> f_:faces_) {   
+    vertices[i] = new PVector[f_.size()]; 
+    int j = 0;
+    
+    for(int f: f_) {
+      PVector v = vertices_.get(f-1);
+      vertices[i][j] = Rotate3d_x(v, -90); 
+      j++;
+    }
+    
+    i++;
+  }
   
 }
 
@@ -96,43 +173,6 @@ PVector Rotate3d(PVector p, PVector a) {
 
 
 
-PVector applyPerspective(PVector p) {
-   PVector c = cam;
-   PVector co = cam_angle;
-   PVector e =  new PVector(0, 0, 100);
-  // c = camera position
-  // co = camera orientation / camera rotation
-  // e = displays surface pos relative to camera pinhole c
-
-  // dx, dy, dz     https://en.wikipedia.org/wiki/3D_projection   :   Mathematical Formula
-  float[][] dxyz = matmul(
-    matmul(new float[][]{
-    {1, 0, 0},
-    {0, cos(co.x), sin(co.x)},
-    {0, -sin(co.x), cos(co.x)}
-    }, new float[][]{
-      {cos(co.y), 0, -sin(co.y)},
-      {0, 1, 0},
-      {sin(co.y), 0, cos(co.y)}
-    }),
-
-    matmul(new float[][]{
-      {cos(co.z), sin(co.z), 0},
-      {-sin(co.z), cos(co.z), 0},
-      {0, 0, 1}
-    }, new float[][]{
-      {p.x - c.x},
-      {p.y - c.y},
-      {p.z - c.z},
-    }));
-
-  PVector d = new PVector(dxyz[0][0], dxyz[1][0], dxyz[2][0]);
-
-  return new PVector((e.z/d.z)*d.x+e.x, (e.z/d.z)*d.y+e.y);
-}
-
-
-
 // Matrixmultiplikation
 float[][] matmul(float[][] m1, float[][] m2) {
 
@@ -178,54 +218,110 @@ float[][] matmul(float[][] m1, float[][] m2) {
 }
 
 
+PVector applyPerspective(PVector p) {
+    PVector d = applyViewTransform(p);
+    return applyPerspectiveTransform(d);
+}
 
+PVector applyViewTransform(PVector p) {
+    // c = camera position
+    // co = camera orientation / camera rotation
+    PVector c = cam;
+    PVector co = cam_angle;
+ 
 
+    // dx, dy, dz     https://en.wikipedia.org/wiki/3D_projection   :   Mathematical Formula
+    float[][] dxyz = matmul(
+            matmul(new float[][]{
+                    {1, 0, 0},
+                    {0, cos(co.x), sin(co.x)},
+                    {0, -sin(co.x), cos(co.x)}
+            }, new float[][]{
+                    {cos(co.y), 0, -sin(co.y)},
+                    {0, 1, 0},
+                    {sin(co.y), 0, cos(co.y)}
+            }),
 
-void draw() {
-  cam_angle = new PVector(0.01*(mouseY-width/2), 0.01*(mouseX-height/2), 0);
-  
-  background(255);
-  translate(width/2, height/2);
-  strokeWeight(1);
-  fill(0);
+            matmul(new float[][]{
+                    {cos(co.z), sin(co.z), 0},
+                    {-sin(co.z), cos(co.z), 0},
+                    {0, 0, 1}
+            }, new float[][]{
+                    {p.x - c.x},
+                    {p.y - c.y},
+                    {p.z - c.z},
+            }));
 
-  PVector[] points_projected = new PVector[points.length];
-
-  for (int i=0; i < points.length; i++) {
-    points_projected[i] =   applyPerspective(points[i]);
-  }
-
-  
-  for (int i=0; i < points_projected.length; i++) {    
-    for (int a=0; a < points_projected.length; a++) {
-      // Alle Punkte verbinden
-      line(points_projected[i].x, points_projected[i].y, points_projected[a].x, points_projected[a].y);
-    }
-  }
-  
+    PVector d = new PVector(dxyz[0][0], dxyz[1][0], dxyz[2][0]);
+    return d;
 }
 
 
+PVector applyPerspectiveTransform(PVector d) {
+     // e = displays surface pos relative to camera pinhole c
+    PVector e = new PVector(0, 0, 300);
+    return new PVector((e.z / d.z) * d.x + e.x, (e.z / d.z) * d.y + e.y);
+}
 
-void keyPressed() {
-  if (key == 'w') {
-    cam.add(Rotate3d(new PVector(0, 0, -20), cam_angle));
-  }
-  
-  if (key == 'a') {
-    cam.add(Rotate3d(new PVector(20, 0, 0), cam_angle));
 
-  }
+void draw() {
+  background(255);
+  translate(width/2, height/2);
+  scale(1,-1); 
+  noStroke();
+  fill(0, 100, 0, 50);
   
-  if (key == 's') {
-    cam.add(Rotate3d(new PVector(0, 0, 20), cam_angle));
+ 
+  
+  PVector[][] points_view = new PVector[vertices.length][];
+  
+  for(int i=0; i < vertices.length; i++) {
+    points_view[i] = new PVector[vertices[i].length];
+    for(int j=0; j < vertices[i].length; j++)
+    points_view[i][j] = applyViewTransform(Rotate3d_y(vertices[i][j], angle));
+  }
 
-  }
-  
-  if (key == 'd') {
-   cam.add(Rotate3d(new PVector(-20, 0, 0), cam_angle));
 
-  }
+    
   
+    float nearPlane = 1.0;
+    
+    
+    
+    for (int c = 0; c < points_view.length; c++) {
+      beginShape();
+      
+        for (int r = 0; r < points_view[c].length-1; r++) {
+            // Alle Punkte verbinden
+            //if (i == a) continue;
+            
+            PVector p0 = points_view[c][r];    
+            PVector p1 = points_view[c][r+1];
+             
+            
+             if(p0.z < nearPlane && p1.z < nearPlane){ continue; };
+             
+           
+             if(p0.z >= nearPlane && p1.z < nearPlane)
+             p1 = PVector.lerp(p0, p1, (p0.z - nearPlane) / (p0.z - p1.z));
+              
+             if(p0.z < nearPlane && p1.z >= nearPlane)
+             p0 = PVector.lerp(p1, p0, (p1.z - nearPlane) / (p1.z - p0.z));
+ 
+            
+            // project
+            p0 = applyPerspectiveTransform(p0);
+            p1 = applyPerspectiveTransform(p1);
+            vertex(p0.x, p0.y);
+            vertex(p1.x, p1.y);
+
+        }
+        endShape();
+    }
+    
+    
+    cam_angle.y+=PI/8;
+    
+
   
 }
